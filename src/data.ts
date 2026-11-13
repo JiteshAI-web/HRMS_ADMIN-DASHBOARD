@@ -2,6 +2,21 @@ import type { AttendanceDay, Employee, Punch, RawMap } from './types';
 
 export const ATTENDANCE_TIME_ZONE = 'Asia/Kolkata';
 
+export const nowMillisInAttendanceZone = (date: Date = new Date()): number => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: ATTENDANCE_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  const hour = Number(map.hour ?? 0);
+  const minute = Number(map.minute ?? 0);
+  const second = Number(map.second ?? 0);
+  return ((hour * 60 + minute) * 60 + second) * 1000;
+};
+
 const datePartsInAttendanceZone = (date: Date) => {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: ATTENDANCE_TIME_ZONE,
@@ -94,7 +109,10 @@ export const buildAttendance = (
         }
       }
       if (started !== null && dateKey(date) === dateKey(new Date())) {
-        worked += Math.max(0, Date.now() - started);
+        const currentZoneMillis = nowMillisInAttendanceZone();
+        if (currentZoneMillis > started) {
+          worked += currentZoneMillis - started;
+        }
       }
       const last = punches[punches.length - 1];
       const firstIn = punches.find((p) => p.type === 'in');
