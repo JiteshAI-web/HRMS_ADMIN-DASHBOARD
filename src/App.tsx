@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
 import { onValue, ref } from 'firebase/database';
-import { Activity, AlertCircle, ArrowUpRight, BriefcaseBusiness, CalendarDays, Check, ChevronDown, Clock3, FileSpreadsheet, FileText, LayoutDashboard, LoaderCircle, LogOut, Menu, Search, ShieldCheck, Users, X } from 'lucide-react';
+import { Activity, AlertCircle, ArrowUpRight, BriefcaseBusiness, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, FileSpreadsheet, FileText, LayoutDashboard, LoaderCircle, LogOut, Mail, MapPin, Menu, Phone, Search, ShieldCheck, Users, UserX, X } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
@@ -416,7 +416,7 @@ export default function App() {
                   setMonth={setMonth}
                   years={availableYears}
                   chart={dailyChart}
-                  rows={monthRows}
+                  todayRows={todayRows}
                   monthLabel={monthLabel(month)}
                   onEmployee={setSelectedEmployee}
                   presentByEmployee={presentByEmployee}
@@ -651,9 +651,34 @@ function AccessDenied({ email, onLogout }: { email: string; onLogout: () => void
   );
 }
 
-function StatCard({ title, value, detail, icon: Icon, tone, tag }: { title: string; value: string | number; detail: string; icon: typeof Users; tone: string; tag?: string }) {
+function StatCard({
+  title,
+  value,
+  detail,
+  icon: Icon,
+  tone,
+  tag,
+  onClick,
+  actionLabel,
+}: {
+  title: string;
+  value: string | number;
+  detail: string;
+  icon: typeof Users;
+  tone: string;
+  tag?: string;
+  onClick?: () => void;
+  actionLabel?: string;
+}) {
+  const isClickable = Boolean(onClick);
   return (
-    <div className={`stat-card ${tone}`}>
+    <div
+      className={`stat-card ${tone} ${isClickable ? 'clickable' : ''}`}
+      onClick={onClick}
+      role={isClickable ? 'button' : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(); } } : undefined}
+    >
       <div className="stat-top">
         <div className="stat-icon"><Icon size={19} /></div>
         {tag && <span className="stat-tag">{tag}</span>}
@@ -661,6 +686,12 @@ function StatCard({ title, value, detail, icon: Icon, tone, tag }: { title: stri
       <div className="stat-value">{value}</div>
       <div className="stat-title">{title}</div>
       <div className="stat-detail">{detail}</div>
+      {actionLabel && (
+        <div className="stat-action-link">
+          <span>{actionLabel}</span>
+          <ArrowUpRight size={13} />
+        </div>
+      )}
     </div>
   );
 }
@@ -675,7 +706,7 @@ function Overview({
   setMonth,
   years,
   chart,
-  rows,
+  todayRows,
   monthLabel: selectedLabel,
   onEmployee,
   presentByEmployee,
@@ -689,20 +720,64 @@ function Overview({
   setMonth: (m: string) => void;
   years: number[];
   chart: { day: number; present: number }[];
-  rows: AttendanceDay[];
+  todayRows: AttendanceDay[];
   monthLabel: string;
   onEmployee: (employee: Employee) => void;
   presentByEmployee: Map<string, number>;
 }) {
+  const [showAbsentModal, setShowAbsentModal] = useState(false);
+  const [activityView, setActivityView] = useState<'checkedIn' | 'absent'>('checkedIn');
+  const [todayPage, setTodayPage] = useState(1);
+
   const top = [...employees].sort((a, b) => (presentByEmployee.get(b.uid) ?? 0) - (presentByEmployee.get(a.uid) ?? 0));
-  const recent = rows.filter((row) => row.dateKey === dateKey(new Date())).slice(0, 6);
+
+  const todayPresentUids = useMemo(() => new Set(todayRows.filter((row) => row.present).map((row) => row.uid)), [todayRows]);
+  const absentEmployees = useMemo(() => employees.filter((emp) => !todayPresentUids.has(emp.uid)), [employees, todayPresentUids]);
+
+  const absentTodayRows: AttendanceDay[] = useMemo(() => {
+    const today = new Date();
+    const tKey = dateKey(today);
+    return absentEmployees.map((emp) => ({
+      uid: emp.uid,
+      employee: emp,
+      dateKey: tKey,
+      date: today,
+      punches: [],
+      present: false,
+      checkedIn: false,
+      inTime: '—',
+      outTime: '—',
+      office: emp.officeKey ? emp.officeKey.replace(/_/g, ' ') : '—',
+      workedMinutes: 0,
+    }));
+  }, [absentEmployees]);
+
+  const displayedRows = activityView === 'absent' ? absentTodayRows : todayRows;
+  const pageSize = 6;
+  const totalPages = Math.ceil(displayedRows.length / pageSize) || 1;
+  const safePage = Math.min(todayPage, totalPages);
+  const pagedRows = displayedRows.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  const handleViewChange = (view: 'checkedIn' | 'absent') => {
+    setActivityView(view);
+    setTodayPage(1);
+  };
 
   return (
     <>
       <div className="stats-grid">
         <StatCard title="Registered employees" value={employees.length} detail="Active in employee directory" icon={Users} tone="blue" />
         <StatCard title="Present today" value={presentCount} detail={`${employees.length ? Math.round(presentCount / employees.length * 100) : 0}% of total workforce`} icon={Check} tone="green" tag="TODAY" />
-        <StatCard title="Absent today" value={absentCount} detail="No check-in recorded today" icon={CalendarDays} tone="orange" tag="TODAY" />
+        <StatCard
+          title="Absent today"
+          value={absentCount}
+          detail="No check-in recorded today"
+          icon={CalendarDays}
+          tone="orange"
+          tag="TODAY"
+          onClick={() => setShowAbsentModal(true)}
+          actionLabel="View absent employees"
+        />
         <StatCard title="Currently checked in" value={currentlyIn} detail="Active attendance sessions" icon={Clock3} tone="purple" tag="LIVE" />
       </div>
 
@@ -778,11 +853,292 @@ function Overview({
             <h3>Today’s activity</h3>
             <p>Latest employee attendance records</p>
           </div>
-          <span className="live-status"><i />Live</span>
+          <div className="activity-view-toggle">
+            <button
+              type="button"
+              className={`activity-toggle-btn ${activityView === 'checkedIn' ? 'active' : ''}`}
+              onClick={() => handleViewChange('checkedIn')}
+            >
+              <span className="live-dot" />
+              <span>Checked IN ({todayRows.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`activity-toggle-btn ${activityView === 'absent' ? 'active absent' : ''}`}
+              onClick={() => handleViewChange('absent')}
+            >
+              <span className="absent-dot" />
+              <span>Absent ({absentEmployees.length})</span>
+            </button>
+          </div>
         </div>
-        <SimpleTable rows={recent} onEmployee={onEmployee} empty="No attendance activity recorded today." />
+        <SimpleTable
+          rows={pagedRows}
+          onEmployee={onEmployee}
+          empty={activityView === 'absent' ? 'No employees absent today. Everyone is present!' : 'No attendance activity recorded today.'}
+        />
+        <Pagination
+          currentPage={safePage}
+          totalPages={totalPages}
+          onPageChange={setTodayPage}
+          totalItems={displayedRows.length}
+          pageSize={pageSize}
+        />
       </section>
+
+      {showAbsentModal && (
+        <AbsentEmployeesModal
+          absentEmployees={absentEmployees}
+          totalRegistered={employees.length}
+          todayDate={formatDate(new Date())}
+          onClose={() => setShowAbsentModal(false)}
+          onEmployee={(employee) => {
+            setShowAbsentModal(false);
+            onEmployee(employee);
+          }}
+          onViewInTable={() => {
+            setShowAbsentModal(false);
+            handleViewChange('absent');
+            const el = document.querySelector('.recent-panel');
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function AbsentEmployeesModal({
+  absentEmployees,
+  totalRegistered,
+  todayDate,
+  onClose,
+  onEmployee,
+  onViewInTable,
+}: {
+  absentEmployees: Employee[];
+  totalRegistered: number;
+  todayDate: string;
+  onClose: () => void;
+  onEmployee: (employee: Employee) => void;
+  onViewInTable?: () => void;
+}) {
+  const [filterQuery, setFilterQuery] = useState('');
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  const filtered = useMemo(() => {
+    const q = filterQuery.trim().toLowerCase();
+    if (!q) return absentEmployees;
+    return absentEmployees.filter(
+      (emp) =>
+        emp.name.toLowerCase().includes(q) ||
+        emp.id.toLowerCase().includes(q) ||
+        (emp.designation && emp.designation.toLowerCase().includes(q)) ||
+        (emp.officeKey && emp.officeKey.toLowerCase().includes(q))
+    );
+  }, [absentEmployees, filterQuery]);
+
+  return (
+    <div className="modal-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <section className="absent-modal" role="dialog" aria-modal="true" aria-labelledby="absent-modal-title">
+        <div className="absent-modal-head">
+          <div className="absent-modal-title-wrap">
+            <div className="absent-modal-icon">
+              <UserX size={20} />
+            </div>
+            <div>
+              <h2 id="absent-modal-title">
+                Absent employees today
+                <span className="absent-count-badge">
+                  {absentEmployees.length} absent
+                </span>
+              </h2>
+              <p>Employees with no check-in recorded for today · {todayDate}</p>
+            </div>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="Close absent employees modal">
+            <X size={18} />
+          </button>
+        </div>
+
+        {absentEmployees.length > 3 && (
+          <div className="absent-search-bar">
+            <div className="absent-search-box">
+              <Search size={14} />
+              <input
+                type="text"
+                placeholder="Search absent employee by name, ID, or designation..."
+                value={filterQuery}
+                onChange={(e) => setFilterQuery(e.target.value)}
+              />
+              {filterQuery && (
+                <button type="button" className="icon-button" onClick={() => setFilterQuery('')} style={{ padding: 2 }}>
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="absent-list">
+          {absentEmployees.length === 0 ? (
+            <div className="absent-empty-box">
+              <div className="absent-empty-icon">
+                <Check size={26} />
+              </div>
+              <h3>All employees are present today!</h3>
+              <p>Every registered employee in your directory has recorded attendance.</p>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="absent-empty-box">
+              <p>No absent employees match "{filterQuery}".</p>
+            </div>
+          ) : (
+            filtered.map((emp) => (
+              <div
+                key={emp.uid}
+                className="absent-item"
+                onClick={() => onEmployee(emp)}
+                title={`Click to view full attendance history for ${emp.name}`}
+              >
+                <div className="absent-item-left">
+                  <span className="absent-avatar">{initials(emp.name)}</span>
+                  <div className="absent-details">
+                    <div className="absent-name-row">
+                      <span className="absent-name">{emp.name}</span>
+                      <span className="absent-id-tag">{emp.id}</span>
+                    </div>
+                    <div className="absent-sub">
+                      <span>{emp.designation || 'Staff'}</span>
+                      {emp.officeKey && (
+                        <span>
+                          <MapPin size={11} />
+                          {emp.officeKey.replace(/_/g, ' ')}
+                        </span>
+                      )}
+                      {emp.phone && (
+                        <span>
+                          <Phone size={11} />
+                          {emp.phone}
+                        </span>
+                      )}
+                      {emp.email && (
+                        <span>
+                          <Mail size={11} />
+                          {emp.email}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="absent-item-right">
+                  <span className="absent-tag">
+                    <i />
+                    Absent today
+                  </span>
+                  <button
+                    type="button"
+                    className="absent-view-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEmployee(emp);
+                    }}
+                  >
+                    <span>View profile</span>
+                    <ArrowUpRight size={13} />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="absent-modal-foot">
+          <span className="absent-foot-info">
+            <b>{absentEmployees.length}</b> of <b>{totalRegistered}</b> registered employees absent
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {onViewInTable && absentEmployees.length > 0 && (
+              <button type="button" className="button-outline" onClick={onViewInTable}>
+                View in table
+              </button>
+            )}
+            <button type="button" className="button-primary" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Pagination({
+  currentPage,
+  totalPages,
+  onPageChange,
+  totalItems,
+  pageSize,
+}: {
+  currentPage: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+  totalItems: number;
+  pageSize: number;
+}) {
+  if (totalPages <= 1) return null;
+
+  const startItem = (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(currentPage * pageSize, totalItems);
+
+  return (
+    <div className="pagination-bar">
+      <span className="pagination-info">
+        Showing <b>{startItem}</b>–<b>{endItem}</b> of <b>{totalItems}</b> today's records
+      </span>
+      <div className="pagination-controls">
+        <button
+          type="button"
+          className="pagination-btn"
+          disabled={currentPage === 1}
+          onClick={() => onPageChange(currentPage - 1)}
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={15} />
+          <span>Prev</span>
+        </button>
+
+        {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+          <button
+            key={pageNum}
+            type="button"
+            className={`pagination-num ${currentPage === pageNum ? 'active' : ''}`}
+            onClick={() => onPageChange(pageNum)}
+          >
+            {pageNum}
+          </button>
+        ))}
+
+        <button
+          type="button"
+          className="pagination-btn"
+          disabled={currentPage === totalPages}
+          onClick={() => onPageChange(currentPage + 1)}
+          aria-label="Next page"
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
   );
 }
 
